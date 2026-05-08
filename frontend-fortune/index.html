@@ -138,6 +138,16 @@
         }
         .restart-btn:hover, .start-btn:hover { transform: scale(1.05) translateY(-2px); box-shadow: 0 12px 35px rgba(0, 200, 255, 0.45); }
         .restart-btn:active, .start-btn:active { transform: scale(0.97); }
+        .undo-btn {
+            background: linear-gradient(135deg, #ff6b9d 0%, #ff9f43 100%);
+            color: #fff; border: none; padding: 10px 18px; font-size: 14px; border-radius: 20px;
+            cursor: pointer; font-weight: 700; letter-spacing: 1px;
+            transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+            box-shadow: 0 4px 15px rgba(255, 107, 157, 0.3);
+        }
+        .undo-btn:hover:not(:disabled) { transform: scale(1.05) translateY(-2px); box-shadow: 0 6px 20px rgba(255, 107, 157, 0.4); }
+        .undo-btn:active:not(:disabled) { transform: scale(0.97); }
+        .undo-btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
         .guide-title { font-size: 24px; font-weight: 800; color: #333; margin-bottom: 20px; }
         .guide-content { text-align: left; margin-bottom: 24px; }
         .guide-item {
@@ -167,6 +177,7 @@
     <div class="game-container">
         <div class="header glass-card">
             <div class="title">TETRIS</div>
+            <button class="undo-btn" id="undoBtn" disabled>↩ 撤销</button>
             <div class="score-area">
                 <span class="score-label">BEST</span>
                 <span class="score-value best" id="bestScore">0</span>
@@ -208,6 +219,7 @@
     </div>
     <script>
 const ROWS = 20, COLS = 10;
+const MAX_HISTORY = 3;
 const COLORS = {
     I: '#00d4aa', O: '#ffcc02', T: '#ff6b9d', S: '#00c8ff', Z: '#ff6b6b', J: '#00e5ff', L: '#ff9f43'
 };
@@ -220,6 +232,7 @@ const STORAGE_KEY = 'tetris_best_score';
 let board = [], score = 0, bestScore = 0, pieces = [null, null, null];
 let dragging = null, dragEl = null;
 let scoreAnimationId = null, hintTimeoutId = null, isClearing = false;
+let history = [];
 
 // 读取历史最高分
 try {
@@ -238,6 +251,7 @@ const guideOverlay = document.getElementById('guideOverlay');
 const startBtn = document.getElementById('startBtn');
 const bestScoreEl = document.getElementById('bestScore');
 const gameOverSubtitle = document.getElementById('gameOverSubtitle');
+const undoBtn = document.getElementById('undoBtn');
 
 // 初始化最高分显示
 bestScoreEl.textContent = bestScore;
@@ -249,7 +263,40 @@ function init() {
     score = 0; scoreEl.textContent = '0';
     hintEl.innerHTML = '<span class="emoji">👆</span>拖动方块到面板中';
     overlayEl.classList.remove('show');
+    history = [];
+    updateUndoButton();
     renderBoard(); generatePieces();
+}
+function saveHistory() {
+    const state = {
+        board: JSON.parse(JSON.stringify(board)),
+        score: score,
+        pieces: JSON.parse(JSON.stringify(pieces))
+    };
+    history.push(state);
+    if (history.length > MAX_HISTORY) {
+        history.shift();
+    }
+    updateUndoButton();
+}
+function updateUndoButton() {
+    undoBtn.disabled = history.length === 0;
+}
+function undo() {
+    if (history.length === 0 || isClearing) return;
+    if (scoreAnimationId) {
+        clearTimeout(scoreAnimationId);
+        scoreAnimationId = null;
+    }
+    const lastState = history.pop();
+    board = lastState.board;
+    score = lastState.score;
+    pieces = lastState.pieces;
+    scoreEl.textContent = score;
+    overlayEl.classList.remove('show');
+    renderBoard();
+    renderPieces();
+    updateUndoButton();
 }
 function renderBoard() {
     boardEl.innerHTML = '';
@@ -383,6 +430,7 @@ function endDrag(e) {
     const offsetR = Math.floor(shape.length / 2), offsetC = Math.floor(shape[0].length / 2);
     const startR = pos.row - offsetR, startC = pos.col - offsetC;
     if (canPlace(shape, startR, startC)) {
+        saveHistory();
         placePiece(dragging.piece, startR, startC);
         pieces[dragging.idx] = null;
         renderPieces(); checkLines();
@@ -512,6 +560,7 @@ function updateHint() {
     else hintEl.innerHTML = '<span class="emoji">👆</span>拖动方块到面板中';
 }
 restartBtn.addEventListener('click', init);
+undoBtn.addEventListener('click', undo);
 init();
     </script>
 </body>
