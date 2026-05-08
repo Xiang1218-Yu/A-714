@@ -29,6 +29,19 @@
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
         }
         .header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; flex-shrink: 0; gap: 10px; }
+        .undo-btn {
+            display: flex; align-items: center; gap: 4px;
+            background: rgba(255, 255, 255, 0.35); border: 1.5px solid rgba(255, 255, 255, 0.5);
+            border-radius: 20px; padding: 6px 12px; cursor: pointer;
+            color: #fff; font-size: 14px; font-weight: 700;
+            transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.15);
+        }
+        .undo-btn:not(:disabled):hover { transform: scale(1.08); background: rgba(255,255,255,0.5); box-shadow: 0 4px 15px rgba(0,0,0,0.12); }
+        .undo-btn:not(:disabled):active { transform: scale(0.95); }
+        .undo-btn:disabled { cursor: not-allowed; }
+        .undo-icon { font-size: 16px; }
+        .undo-count { font-size: 12px; min-width: 10px; text-align: center; }
         .title {
             font-size: 22px; font-weight: 800; color: #fff; letter-spacing: 3px;
             text-shadow: 2px 2px 10px rgba(0,0,0,0.15);
@@ -150,6 +163,7 @@
             .game-container { padding: 8px; gap: 5px; }
             .header { padding: 10px 14px; }
             .title { font-size: 18px; }
+            .undo-btn { padding: 4px 8px; font-size: 12px; }
             .score-value { font-size: 20px; }
             .pieces-container { height: 60px; }
             .piece-wrapper { width: 68px; height: 60px; }
@@ -167,6 +181,10 @@
     <div class="game-container">
         <div class="header glass-card">
             <div class="title">TETRIS</div>
+            <button class="undo-btn" id="undoBtn" disabled>
+                <span class="undo-icon">↩</span>
+                <span class="undo-count">0</span>
+            </button>
             <div class="score-area">
                 <span class="score-label">BEST</span>
                 <span class="score-value best" id="bestScore">0</span>
@@ -202,6 +220,7 @@
                 <div class="guide-item"><span class="guide-icon">💥</span><span>填满一行自动消除得分</span></div>
                 <div class="guide-item"><span class="guide-icon">🏆</span><span>同时消N行得 N² 分</span></div>
                 <div class="guide-item"><span class="guide-icon">🚫</span><span>方块放不下时游戏结束</span></div>
+                <div class="guide-item"><span class="guide-icon">↩</span><span>可撤销最近3步操作（含分数）</span></div>
             </div>
             <button class="start-btn" id="startBtn">开始游戏</button>
         </div>
@@ -220,6 +239,45 @@ const STORAGE_KEY = 'tetris_best_score';
 let board = [], score = 0, bestScore = 0, pieces = [null, null, null];
 let dragging = null, dragEl = null;
 let scoreAnimationId = null, hintTimeoutId = null, isClearing = false;
+const MAX_UNDO = 3;
+let undoHistory = [];
+let undoLock = false;
+
+function saveSnapshot() {
+    undoHistory.push({
+        board: board.map(row => [...row]),
+        score: score,
+        pieces: pieces.map(p => p ? { shape: p.shape.map(r => [...r]), color: p.color, type: p.type } : null)
+    });
+    if (undoHistory.length > MAX_UNDO) undoHistory.shift();
+    updateUndoButton();
+}
+
+function updateUndoButton() {
+    const btn = document.getElementById('undoBtn');
+    if (!btn) return;
+    const disabled = undoHistory.length === 0 || isClearing || undoLock;
+    btn.disabled = disabled;
+    btn.style.opacity = disabled ? '0.35' : '1';
+    btn.querySelector('.undo-count').textContent = undoHistory.length;
+}
+
+function undo() {
+    if (undoHistory.length === 0 || isClearing || undoLock) return;
+    undoLock = true;
+    updateUndoButton();
+    const snapshot = undoHistory.pop();
+    board = snapshot.board;
+    score = snapshot.score;
+    scoreEl.textContent = score;
+    pieces = snapshot.pieces;
+    if (scoreAnimationId) { clearTimeout(scoreAnimationId); scoreAnimationId = null; }
+    updateBoardDOM();
+    updateAllPieceSlots();
+    updateHint();
+    undoLock = false;
+    updateUndoButton();
+}
 
 // 读取历史最高分
 try {
@@ -243,22 +301,41 @@ const gameOverSubtitle = document.getElementById('gameOverSubtitle');
 bestScoreEl.textContent = bestScore;
 
 startBtn.addEventListener('click', () => guideOverlay.classList.remove('show'));
+document.getElementById('undoBtn').addEventListener('click', undo);
 
 function init() {
     board = Array(ROWS).fill(null).map(() => Array(COLS).fill(null));
-    score = 0; scoreEl.textContent = '0';
+    score = 0; scoreEl.textContent = '0'; undoHistory = [];
     hintEl.innerHTML = '<span class="emoji">👆</span>拖动方块到面板中';
     overlayEl.classList.remove('show');
-    renderBoard(); generatePieces();
+    renderBoard(); generatePieces(); updateUndoButton();
 }
 function renderBoard() {
-    boardEl.innerHTML = '';
+    if (boardEl.children.length !== ROWS * COLS) {
+        boardEl.innerHTML = '';
+        for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell'; cell.dataset.row = r; cell.dataset.col = c;
+                boardEl.appendChild(cell);
+            }
+        }
+    }
+    updateBoardDOM();
+}
+function updateBoardDOM() {
+    const cells = boardEl.children;
     for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS; c++) {
-            const cell = document.createElement('div');
-            cell.className = 'cell'; cell.dataset.row = r; cell.dataset.col = c;
-            if (board[r][c]) { cell.classList.add('filled'); cell.style.background = board[r][c]; }
-            boardEl.appendChild(cell);
+            const cell = cells[r * COLS + c];
+            const val = board[r][c];
+            if (val) {
+                if (!cell.classList.contains('filled')) cell.classList.add('filled');
+                if (cell.style.background !== val) cell.style.background = val;
+            } else {
+                cell.classList.remove('filled', 'clearing', 'preview', 'preview-invalid');
+                cell.style.background = '';
+            }
         }
     }
 }
@@ -268,19 +345,35 @@ function randomPiece() {
     return { shape: SHAPES[key], color: COLORS[key], type: key };
 }
 function renderPieces() {
-    piecesEl.innerHTML = '';
-    pieces.forEach((piece, idx) => {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'piece-wrapper' + (piece ? '' : ' empty');
-        wrapper.dataset.index = idx;
-        if (piece) {
-            wrapper.appendChild(createPieceElement(piece));
-            wrapper.addEventListener('mousedown', e => startDrag(e, idx));
-            wrapper.addEventListener('touchstart', e => startDrag(e, idx), { passive: false });
+    if (piecesEl.children.length !== 3) {
+        piecesEl.innerHTML = '';
+        for (let idx = 0; idx < 3; idx++) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'piece-wrapper';
+            wrapper.dataset.index = idx;
+            piecesEl.appendChild(wrapper);
         }
-        piecesEl.appendChild(wrapper);
-    });
+    }
+    updateAllPieceSlots();
+}
+function updateAllPieceSlots() {
+    for (let idx = 0; idx < 3; idx++) updatePieceSlot(idx);
     updateHint();
+}
+function updatePieceSlot(idx) {
+    if (dragging && dragging.idx === idx) return;
+    const wrapper = piecesEl.children[idx];
+    if (!wrapper) return;
+    const piece = pieces[idx];
+    wrapper.innerHTML = '';
+    wrapper.className = 'piece-wrapper' + (piece ? '' : ' empty');
+    wrapper.onmousedown = null;
+    wrapper.ontouchstart = null;
+    if (piece) {
+        wrapper.appendChild(createPieceElement(piece));
+        wrapper.addEventListener('mousedown', e => startDrag(e, idx));
+        wrapper.addEventListener('touchstart', e => startDrag(e, idx), { passive: false });
+    }
 }
 function createPieceElement(piece) {
     const el = document.createElement('div'); el.className = 'piece';
@@ -304,7 +397,7 @@ function startDrag(e, idx) {
     dragEl.appendChild(createPieceElement(dragging.piece));
     document.body.appendChild(dragEl);
     updateDragPosition(touch.clientX, touch.clientY);
-    document.querySelectorAll('.piece-wrapper')[idx].classList.add('dragging');
+    piecesEl.children[idx].classList.add('dragging');
     document.addEventListener('mousemove', onDrag);
     document.addEventListener('mouseup', endDrag);
     document.addEventListener('touchmove', onDrag, { passive: false });
@@ -373,29 +466,33 @@ function endDrag(e) {
     document.removeEventListener('touchcancel', endDrag);
     clearPreview();
     const touch = e.changedTouches ? e.changedTouches[0] : e;
-    const shape = dragging.piece.shape;
+    const { idx, piece } = dragging;
+    const shape = piece.shape;
     const rect = boardEl.getBoundingClientRect();
     const cellH = rect.height / ROWS;
-    // 大幅向上偏移，与预览位置一致
     const offsetY = (shape.length * cellH * 1.2) + 60;
     const adjustedY = touch.clientY - offsetY;
     const pos = getBoardPosition(touch.clientX, adjustedY);
     const offsetR = Math.floor(shape.length / 2), offsetC = Math.floor(shape[0].length / 2);
     const startR = pos.row - offsetR, startC = pos.col - offsetC;
-    if (canPlace(shape, startR, startC)) {
-        placePiece(dragging.piece, startR, startC);
-        pieces[dragging.idx] = null;
-        renderPieces(); checkLines();
-    } else { if (navigator.vibrate) navigator.vibrate(50); }
-    document.querySelectorAll('.piece-wrapper')[dragging.idx]?.classList.remove('dragging');
+    const placed = canPlace(shape, startR, startC);
     if (dragEl) { dragEl.remove(); dragEl = null; }
     dragging = null;
+    if (placed) {
+        saveSnapshot();
+        placePiece(piece, startR, startC);
+        pieces[idx] = null;
+    } else {
+        if (navigator.vibrate) navigator.vibrate(50);
+    }
+    updatePieceSlot(idx);
+    if (placed) checkLines();
 }
 function placePiece(piece, startR, startC) {
     piece.shape.forEach((row, r) => row.forEach((cell, c) => {
         if (cell) board[startR + r][startC + c] = piece.color;
     }));
-    renderBoard();
+    updateBoardDOM();
 }
 function checkLines() {
     // 找出所有满行
@@ -418,6 +515,7 @@ function checkLines() {
     }
     
     isClearing = true;
+    updateUndoButton();
     
     // 播放消除动画
     fullRows.forEach(r => {
@@ -444,9 +542,10 @@ function checkLines() {
         // 替换 board
         board = newBoard;
         
-        renderBoard();
+        updateBoardDOM();
         addScore(fullRows.length * fullRows.length);
         isClearing = false;
+        updateUndoButton();
         
         if (pieces.every(p => p === null)) generatePieces();
         checkGameOver();
